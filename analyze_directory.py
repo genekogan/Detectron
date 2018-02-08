@@ -208,7 +208,7 @@ def main(args):
             kp_thresh=2
         )
 
-    with open('demo/data.json', 'w') as outfile:
+    with open('%s/results.json'%args.output_dir, 'w') as outfile:
         json.dump(final_json, outfile)
 
 
