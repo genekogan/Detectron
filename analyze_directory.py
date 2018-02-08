@@ -171,6 +171,7 @@ def main(args):
     final_json = {'images':[]}
 
     for i, im_name in enumerate(im_list):
+
         out_name = os.path.join(
             args.output_dir, '{}'.format(os.path.basename(im_name) + '.pdf')
         )
@@ -192,6 +193,10 @@ def main(args):
             )
 
         results = get_result_json(cls_boxes, cls_segms, cls_keyps, thresh=args.save_thresh, dataset=dummy_coco_dataset)
+        results['path'] = im_name
+        results['width'] = im.shape[0]
+        results['height'] = im.shape[1]
+
         final_json['images'].append(results)
         
         vis_utils.vis_one_image(
