@@ -19,6 +19,7 @@
 (e.g., .jpg) in a folder.
 """
 
+
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
@@ -34,6 +35,8 @@ import sys
 import time
 import numpy as np
 import json
+from os import listdir
+from os.path import isfile, isdir, join
 
 from caffe2.python import workspace
 
@@ -61,6 +64,8 @@ c2_utils.import_detectron_ops()
 cv2.ocl.setUseOpenCL(False)
 
 
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description='End-to-end inference')
     parser.add_argument(
@@ -78,13 +83,6 @@ def parse_args():
         type=str
     )
     parser.add_argument(
-        '--output-dir',
-        dest='output_dir',
-        help='directory for visualization pdfs (default: /tmp/infer_simple)',
-        default='/tmp/infer_simple',
-        type=str
-    )
-    parser.add_argument(
         '--image-ext',
         dest='image_ext',
         help='image file name extension (default: jpg)',
@@ -92,24 +90,35 @@ def parse_args():
         type=str
     )
     parser.add_argument(
-        '--save_thresh',
+        '--save-thresh',
         dest='save_thresh',
         help='minimum threshold for score to keep found objects',
         default=0.6,
         type=float
     )
-    
-
     parser.add_argument(
-        'im_or_folder', help='image or folder of images', default=None
+        '--image-dir',
+        dest='image_dir',
+        help='outer directory of all images',
+        type=str
     )
+    parser.add_argument(
+        '--json-dir',
+        dest='json_dir',
+        help='outer directory to put json files',
+        type=str
+    )
+    parser.add_argument(
+        '--output-dir',
+        dest='output_dir',
+        help='outer directory to put output PDFs',
+        type=str
+    )
+
     if len(sys.argv) == 1:
         parser.print_help()
         sys.exit(1)
     return parser.parse_args()
-
-
-
 
 
 def get_result_json(boxes, segms, keypoints, thresh=0.7, dataset=None):
@@ -131,7 +140,7 @@ def get_result_json(boxes, segms, keypoints, thresh=0.7, dataset=None):
     sorted_inds = np.argsort(-areas)
     sorted_inds = np.argsort(-boxes[:,4])
 
-    results = {'segms':segms, 'objects':[]}
+    results = {'mask_rle':segms, 'objects':[]}
     for i in sorted_inds:
         score = boxes[i, -1]
         
@@ -154,7 +163,7 @@ def get_result_json(boxes, segms, keypoints, thresh=0.7, dataset=None):
 
 
 
-def main(args):
+def main2(args):
     logger = logging.getLogger(__name__)
     merge_cfg_from_file(args.cfg)
     cfg.TEST.WEIGHTS = args.weights
@@ -217,6 +226,78 @@ def main(args):
         json.dump(final_json, outfile)
 
 
+
+def main(args):
+    logger = logging.getLogger(__name__)
+    merge_cfg_from_file(args.cfg)
+    cfg.TEST.WEIGHTS = args.weights
+    cfg.NUM_GPUS = 1
+    assert_and_infer_cfg()
+    model = infer_engine.initialize_model_from_cfg()
+    dummy_coco_dataset = dummy_datasets.get_coco_dataset()
+
+    image_dir = args.image_dir
+    output_dir = args.output_dir
+    json_dir = args.json_dir
+    image_ext = args.image_ext
+
+    inner_dirs = [d for d in listdir(image_dir) if isdir(join(image_dir, d)) ]
+    for inner_dir in inner_dirs:
+
+        if not os.path.isdir(join(output_dir, inner_dir)):
+            os.mkdir(join(output_dir, inner_dir))
+
+        if not os.path.isdir(join(json_dir, inner_dir)):
+            os.mkdir(join(json_dir, inner_dir))
+
+        files = [f for f in listdir(join(image_dir, inner_dir)) if isfile(join(join(image_dir, inner_dir), f)) and f.endswith(image_ext) ]
+
+        for f in files:
+
+            image_file = join(join(image_dir, inner_dir), f)
+            out_file = join(join(output_dir, inner_dir), f.replace(".%s"%image_ext, ".pdf"))
+            json_file = join(join(json_dir, inner_dir), f.replace(".%s"%image_ext, ".json"))
+            
+            print("Processing %s -> %s"%(image_file, out_file))
+            logger.info('Processing {} -> {}'.format(image_file, out_file))
+
+            im = cv2.imread(image_file)
+            timers = defaultdict(Timer)
+            t = time.time()
+            with c2_utils.NamedCudaScope(0):
+                cls_boxes, cls_segms, cls_keyps = infer_engine.im_detect_all(
+                    model, im, None, timers=timers
+                )
+            logger.info('Inference time: {:.3f}s'.format(time.time() - t))
+            for k, v in timers.items():
+                logger.info(' | {}: {:.3f}s'.format(k, v.average_time))
+
+            results = get_result_json(cls_boxes, cls_segms, cls_keyps, thresh=args.save_thresh, dataset=dummy_coco_dataset)
+            results['path'] = image_file
+            results['width'] = im.shape[0]
+            results['height'] = im.shape[1]
+            
+            vis_utils.vis_one_image(
+                im[:, :, ::-1],  # BGR -> RGB for visualization
+                image_file,
+                join(output_dir, inner_dir),
+                cls_boxes,
+                cls_segms,
+                cls_keyps,
+                dataset=dummy_coco_dataset,
+                box_alpha=0.3,
+                show_class=True,
+                thresh=args.save_thresh,
+                kp_thresh=2
+            )
+
+            with open(json_file, 'w') as outfile:
+                json.dump(results, outfile)
+
+
+
+
+        
 
 if __name__ == '__main__':
     workspace.GlobalInit(['caffe2', '--caffe2_log_level=0'])
