@@ -1,4 +1,4 @@
-#!/usr/bin/env python2
+#!/usr/bin/env python
 
 # Copyright (c) 2017-present, Facebook, Inc.
 #
@@ -35,17 +35,19 @@ import time
 
 from caffe2.python import workspace
 
-from core.config import assert_and_infer_cfg
-from core.config import cfg
-from core.config import merge_cfg_from_file
-from utils.timer import Timer
-import core.test_engine as infer_engine
-import datasets.dummy_datasets as dummy_datasets
-import utils.c2 as c2_utils
-import utils.logging
-import utils.vis as vis_utils
+from detectron.core.config import assert_and_infer_cfg
+from detectron.core.config import cfg
+from detectron.core.config import merge_cfg_from_file
+from detectron.utils.io import cache_url
+from detectron.utils.logging import setup_logging
+from detectron.utils.timer import Timer
+import detectron.core.test_engine as infer_engine
+import detectron.datasets.dummy_datasets as dummy_datasets
+import detectron.utils.c2 as c2_utils
+import detectron.utils.vis as vis_utils
 
 c2_utils.import_detectron_ops()
+
 # OpenCL may be enabled by default in OpenCV3; disable it because it's not
 # thread safe and causes unwanted GPU memory allocations.
 cv2.ocl.setUseOpenCL(False)
@@ -82,6 +84,33 @@ def parse_args():
         type=str
     )
     parser.add_argument(
+        '--always-out',
+        dest='out_when_no_box',
+        help='output image even when no object is found',
+        action='store_true'
+    )
+    parser.add_argument(
+        '--output-ext',
+        dest='output_ext',
+        help='output image file format (default: pdf)',
+        default='pdf',
+        type=str
+    )
+    parser.add_argument(
+        '--thresh',
+        dest='thresh',
+        help='Threshold for visualizing detections',
+        default=0.7,
+        type=float
+    )
+    parser.add_argument(
+        '--kp-thresh',
+        dest='kp_thresh',
+        help='Threshold for visualizing keypoints',
+        default=2.0,
+        type=float
+    )
+    parser.add_argument(
         'im_or_folder', help='image or folder of images', default=None
     )
     if len(sys.argv) == 1:
@@ -92,11 +121,18 @@ def parse_args():
 
 def main(args):
     logger = logging.getLogger(__name__)
+
     merge_cfg_from_file(args.cfg)
-    cfg.TEST.WEIGHTS = args.weights
     cfg.NUM_GPUS = 1
-    assert_and_infer_cfg()
-    model = infer_engine.initialize_model_from_cfg()
+    args.weights = cache_url(args.weights, cfg.DOWNLOAD_CACHE)
+    assert_and_infer_cfg(cache_urls=False)
+
+    assert not cfg.MODEL.RPN_ONLY, \
+        'RPN models are not supported'
+    assert not cfg.TEST.PRECOMPUTED_PROPOSALS, \
+        'Models that require precomputed proposals are not supported'
+
+    model = infer_engine.initialize_model_from_cfg(args.weights)
     dummy_coco_dataset = dummy_datasets.get_coco_dataset()
 
     if os.path.isdir(args.im_or_folder):
@@ -106,7 +142,7 @@ def main(args):
 
     for i, im_name in enumerate(im_list):
         out_name = os.path.join(
-            args.output_dir, '{}'.format(os.path.basename(im_name) + '.pdf')
+            args.output_dir, '{}'.format(os.path.basename(im_name) + '.' + args.output_ext)
         )
         logger.info('Processing {} -> {}'.format(im_name, out_name))
         im = cv2.imread(im_name)
@@ -135,13 +171,15 @@ def main(args):
             dataset=dummy_coco_dataset,
             box_alpha=0.3,
             show_class=True,
-            thresh=0.7,
-            kp_thresh=2
+            thresh=args.thresh,
+            kp_thresh=args.kp_thresh,
+            ext=args.output_ext,
+            out_when_no_box=args.out_when_no_box
         )
 
 
 if __name__ == '__main__':
     workspace.GlobalInit(['caffe2', '--caffe2_log_level=0'])
-    utils.logging.setup_logging(__name__)
+    setup_logging(__name__)
     args = parse_args()
     main(args)
