@@ -1,0 +1,7 @@
+name: Detectron
+description: Mask-RCNN / Object Detection
+license: Apache License 2.0
+base: python3.5
+entrypoint: python model.py
+build_steps:
+  - pip install -r requirements.txt
